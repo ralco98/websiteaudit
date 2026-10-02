@@ -28,7 +28,7 @@ COPY apps/api/ ./apps/api/
 RUN pnpm --filter @convertaudit/api... build
 
 # Install Chromium browser binary for Playwright
-RUN npx playwright install chromium
+RUN pnpm --filter @convertaudit/api exec playwright install chromium
 
 ENV NODE_ENV=production
 ENV PORT=3001

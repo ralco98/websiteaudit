@@ -1,0 +1,636 @@
+openapi: 3.1.0
+info:
+  title: ConvertAudit AI API
+  version: 1.0.0
+  summary: Website UX, speed, and conversion auditing.
+  description: |
+    Audits are asynchronous. `POST /v1/audits` returns `202` immediately; follow progress via SSE
+    (`/events`), webhooks, or polling `GET /v1/audits/{auditId}`.
+
+    **Conventions**
+    - IDs are prefixed base62 encodings of UUIDv7 (`aud_…`, `exp_…`, `brd_…`).
+    - Errors use RFC 9457 `application/problem+json` with a stable `code` and `trace_id`.
+    - Cross-tenant resource IDs return `404` (never `403`).
+    - Mutating requests accept `Idempotency-Key` (24 h replay window).
+    - Every response includes `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.
+    - Immutable resources (`terminal` audits, reports) are served with strong `ETag` and
+      `Cache-Control: private, max-age=31536000, immutable`.
+servers:
+  - url: https://api.convertaudit.ai
+security:
+  - bearerAuth: []
+tags:
+  - { name: Audits }
+  - { name: Exports }
+  - { name: Sharing }
+  - { name: Sites }
+  - { name: Brands }
+  - { name: Monitors }
+  - { name: Webhooks }
+  - { name: Usage }
+
+paths:
+  /v1/audits:
+    post:
+      tags: [Audits]
+      operationId: createAudit
+      summary: Start an audit
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAuditRequest' }
+      responses:
+        '202':
+          description: Accepted (or a deduplicated recent audit; see `deduped`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditAccepted' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '402': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Problem' }
+    get:
+      tags: [Audits]
+      operationId: listAudits
+      summary: List audits (keyset pagination, newest first)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from `next_cursor`. }
+        - { name: site_id, in: query, schema: { type: string } }
+        - { name: client_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [running, complete, partial, failed, canceled] } }
+        - { name: since, in: query, schema: { type: string, format: date-time }, description: Lower bound; defaults to 90 days ago. }
+      responses:
+        '200':
+          description: Page of audits
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/AuditSummary' } }
+                  next_cursor: { type: [string, 'null'] }
+
+  /v1/audits/{auditId}:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    get:
+      tags: [Audits]
+      operationId: getAudit
+      summary: Get audit status, scores, and top fixes
+      responses:
+        '200':
+          description: Audit
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Audit' }
+        '304': { description: Not modified }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Audits]
+      operationId: deleteAudit
+      summary: Soft-delete an audit (recoverable for 30 days)
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/audits/{auditId}/report:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    get:
+      tags: [Audits]
+      operationId: getReport
+      summary: Full report (report.v1) — single-lookup, CDN-cacheable
+      parameters:
+        - { name: revision, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { description: Audit not yet terminal, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+
+  /v1/audits/{auditId}/findings:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    get:
+      tags: [Audits]
+      operationId: listFindings
+      summary: Findings with rendered text (server-side templates)
+      parameters:
+        - { name: module, in: query, schema: { type: string, enum: [speed, clarity, conversion] } }
+        - { name: min_severity, in: query, schema: { type: string, enum: [info, low, medium, high, critical] } }
+        - { name: lang, in: query, schema: { type: string, default: en } }
+        - { name: include_hidden, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: Findings ordered by priority
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+
+  /v1/audits/{auditId}/events:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    get:
+      tags: [Audits]
+      operationId: streamAuditEvents
+      summary: Server-Sent Events stream of audit progress
+      description: |
+        Use the short-lived `stream_token` from `POST /v1/audits/{id}/stream-token`
+        (or the session cookie in browsers). Resume with `Last-Event-ID`.
+        Events: `audit.started`, `capture.progress`, `capture.screenshot`, `module.started`,
+        `module.completed`, `module.failed`, `module.skipped`, `audit.progress`,
+        `audit.completed`, `audit.failed`, `audit.canceled`, `heartbeat`.
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /v1/audits/{auditId}/cancel:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    post:
+      tags: [Audits]
+      operationId: cancelAudit
+      summary: Cancel a running audit
+      responses:
+        '202': { description: Cancellation requested }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /v1/audits/{auditId}/modules/{module}/retry:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+      - { name: module, in: path, required: true, schema: { type: string, enum: [speed, clarity, conversion] } }
+    post:
+      tags: [Audits]
+      operationId: retryModule
+      summary: Retry a failed module on a PARTIAL audit (no extra credit)
+      responses:
+        '202': { description: Retry queued; creates scoring revision on success }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /v1/audits/{auditId}/exports:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    post:
+      tags: [Exports]
+      operationId: createExport
+      summary: Request a PDF or JSON export (cached by audit+brand version+options)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateExportRequest' }
+      responses:
+        '202':
+          description: Export queued (or ready immediately if cached)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Export' }
+
+  /v1/exports/{exportId}:
+    get:
+      tags: [Exports]
+      operationId: getExport
+      summary: Export status and short-lived download URL
+      parameters:
+        - { name: exportId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Export' }
+          description: Export
+
+  /v1/audits/{auditId}/share:
+    parameters:
+      - { $ref: '#/components/parameters/AuditId' }
+    post:
+      tags: [Sharing]
+      operationId: createShareLink
+      summary: Create a revocable share link
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                brand_id: { type: string }
+                expires_at: { type: string, format: date-time }
+                password: { type: string, minLength: 8, writeOnly: true }
+      responses:
+        '201':
+          description: Share link (token shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, format: uri }
+                  expires_at: { type: [string, 'null'], format: date-time }
+    delete:
+      tags: [Sharing]
+      operationId: revokeShareLinks
+      summary: Revoke all share links for the audit
+      responses:
+        '204': { description: Revoked (effective ≤ 5 s) }
+
+  /v1/sites/{siteId}/trend:
+    get:
+      tags: [Sites]
+      operationId: getSiteTrend
+      summary: Score history for a site (index-only query; up to 90 points per call)
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Trend points, oldest first; `baseline_resets` marks profile changes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  points:
+                    type: array
+                    items: { $ref: '#/components/schemas/TrendPoint' }
+                  baseline_resets: { type: array, items: { type: string, format: date-time } }
+
+  /v1/sites/{siteId}/findings/{code}/state:
+    put:
+      tags: [Sites]
+      operationId: setFindingState
+      summary: Mark a finding resolved, dismissed, or hidden for a site (persists across audits)
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: code, in: path, required: true, schema: { type: string, example: SPEED_HEAVY_IMAGE } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: { type: string, enum: [resolved, dismissed, hidden, active] }
+                reason: { type: string, maxLength: 280 }
+      responses:
+        '204': { description: Updated }
+
+  /v1/brands:
+    get:
+      tags: [Brands]
+      operationId: listBrands
+      responses:
+        '200':
+          description: Brand profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Brand' } }
+    post:
+      tags: [Brands]
+      operationId: createBrand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BrandInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Brand' }
+
+  /v1/monitors:
+    post:
+      tags: [Monitors]
+      operationId: createMonitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, frequency]
+              properties:
+                url: { type: string, format: uri }
+                frequency: { type: string, enum: [daily, weekly, monthly] }
+                drop_threshold: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '201': { description: Created }
+
+  /v1/webhooks:
+    post:
+      tags: [Webhooks]
+      operationId: createWebhook
+      summary: Register an endpoint (destination validated with SSRF rules)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items: { type: string, enum: [audit.completed, audit.failed, export.ready, monitor.regression] }
+      responses:
+        '201':
+          description: Created; `secret` is returned once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  secret: { type: string }
+
+  /v1/usage:
+    get:
+      tags: [Usage]
+      operationId: getUsage
+      summary: Credit balance (single-row read)
+      responses:
+        '200':
+          description: Balance
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usage' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key (`ca_live_…`) with scopes, or session JWT.
+
+  parameters:
+    AuditId:
+      name: auditId
+      in: path
+      required: true
+      schema: { type: string, example: aud_7Vq2xK9mLpR4tYw1 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 128 }
+
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code, trace_id]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code:
+          type: string
+          enum: [INVALID_URL, TARGET_BLOCKED, TARGET_UNREACHABLE, TARGET_FORBIDDEN, TARGET_TOO_LARGE,
+                 AI_UNAVAILABLE, SKIPPED_OPT_OUT, QUOTA_EXCEEDED, RATE_LIMITED, COST_LIMIT,
+                 IDEMPOTENCY_KEY_REUSED, INTERNAL]
+        trace_id: { type: string }
+
+    CreateAuditRequest:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url: { type: string, maxLength: 2048, example: https://example.com }
+        client_id: { type: string }
+        pages:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 2048 }
+          description: Additional same-origin pages (paid plans).
+        force: { type: boolean, default: false, description: Bypass 10-minute dedupe; consumes a credit. }
+        fresh: { type: boolean, default: false, description: Bypass the shared capture cache. }
+        webhook_url: { type: string, format: uri }
+
+    AuditAccepted:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [QUEUED] }
+        deduped: { type: boolean }
+        cached_capture: { type: boolean }
+        estimated_seconds: { type: integer }
+        links:
+          type: object
+          properties:
+            self: { type: string }
+            events: { type: string }
+            report: { type: string }
+
+    Scores:
+      type: object
+      properties:
+        overall: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        speed: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        clarity: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        conversion: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        grade: { type: [string, 'null'], enum: [A, B, C, D, F, null] }
+
+    ModuleStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [pending, running, succeeded, failed, skipped] }
+        confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        error_code: { type: [string, 'null'] }
+
+    AuditSummary:
+      type: object
+      properties:
+        id: { type: string }
+        site_id: { type: string }
+        host: { type: string }
+        status: { type: string, enum: [QUEUED, VALIDATING, CAPTURING, ANALYZING, SCORING, COMPLETE, PARTIAL, FAILED, CANCELED] }
+        created_at: { type: string, format: date-time }
+        scores: { $ref: '#/components/schemas/Scores' }
+
+    Audit:
+      allOf:
+        - $ref: '#/components/schemas/AuditSummary'
+        - type: object
+          properties:
+            progress: { type: integer, minimum: 0, maximum: 100 }
+            finished_at: { type: [string, 'null'], format: date-time }
+            duration_ms: { type: [integer, 'null'] }
+            profile_version: { type: integer }
+            scoring_version: { type: integer }
+            revision: { type: integer }
+            cached_capture: { type: boolean }
+            losing_visitors: { type: boolean, description: LCP median > 3 s. }
+            modules:
+              type: object
+              properties:
+                speed: { $ref: '#/components/schemas/ModuleStatus' }
+                clarity: { $ref: '#/components/schemas/ModuleStatus' }
+                conversion: { $ref: '#/components/schemas/ModuleStatus' }
+            top_fixes:
+              type: array
+              maxItems: 10
+              items: { $ref: '#/components/schemas/Finding' }
+
+    Finding:
+      type: object
+      required: [code, module, severity, effort, priority]
+      properties:
+        code: { type: string, example: SPEED_HEAVY_IMAGE }
+        module: { type: string, enum: [speed, clarity, conversion] }
+        severity: { type: string, enum: [info, low, medium, high, critical] }
+        effort: { type: integer, minimum: 1, maximum: 3 }
+        priority: { type: number }
+        rank: { type: [integer, 'null'] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        state: { type: string, enum: [active, resolved, dismissed, hidden] }
+        params: { type: object, additionalProperties: true }
+        evidence:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [request, bbox, selector, metric, text] }
+        headline: { type: string }
+        impact: { type: string }
+        fix: { type: string }
+        developer_brief: { type: string }
+
+    Report:
+      type: object
+      description: Canonical `report.v1` snapshot.
+      required: [schema, audit, scores, findings]
+      properties:
+        schema: { type: string, const: report.v1 }
+        audit: { $ref: '#/components/schemas/Audit' }
+        scores: { $ref: '#/components/schemas/Scores' }
+        speed:
+          type: object
+          properties:
+            metrics_lab: { type: object, additionalProperties: { type: number } }
+            metrics_field: { type: [object, 'null'] }
+            stability: { type: string, enum: [stable, moderate, noisy] }
+            samples: { type: integer }
+            waterfall_top: { type: array, items: { type: object } }
+        clarity:
+          type: object
+          properties:
+            subscores: { type: object, additionalProperties: { type: integer, minimum: 0, maximum: 20 } }
+            comprehension: { type: object }
+            pins: { type: array, items: { type: object } }
+            needs_human_review: { type: boolean }
+        conversion:
+          type: object
+          properties:
+            rubric: { type: array, items: { type: object } }
+            primary_cta: { type: [object, 'null'] }
+            contact_paths: { type: array, items: { type: object } }
+        findings: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+        artifacts:
+          type: object
+          properties:
+            viewport_5s: { type: string, format: uri, description: Short-lived signed URL. }
+            fullpage: { type: string, format: uri }
+
+    CreateExportRequest:
+      type: object
+      required: [format]
+      properties:
+        format: { type: string, enum: [pdf, json] }
+        brand_id: { type: string }
+        page_size: { type: string, enum: [A4, Letter], default: A4 }
+        prepared_for: { type: string, maxLength: 120 }
+        sections:
+          type: array
+          items: { type: string, enum: [summary, speed, clarity, conversion, action_plan, next_steps] }
+
+    Export:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [requested, rendering, ready, failed] }
+        format: { type: string }
+        download_url: { type: [string, 'null'], format: uri, description: Valid 5 minutes. }
+        size_bytes: { type: [integer, 'null'] }
+
+    TrendPoint:
+      type: object
+      properties:
+        at: { type: string, format: date-time }
+        overall: { type: integer }
+        speed: { type: integer }
+        clarity: { type: integer }
+        conversion: { type: integer }
+        profile_version: { type: integer }
+
+    Brand:
+      allOf:
+        - $ref: '#/components/schemas/BrandInput'
+        - type: object
+          properties:
+            id: { type: string }
+            version: { type: integer }
+            custom_domain_state: { type: string, enum: [none, pending_dns, verified, cert_issuing, active, suspended] }
+
+    BrandInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 80 }
+        primary: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        accent: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+        font: { type: string, description: One of the vetted font list. }
+        contact: { type: string, maxLength: 400 }
+        footer: { type: string, maxLength: 400 }
+        cta_url: { type: string, format: uri, description: https only. }
+        logo_upload_id: { type: string }
+        custom_domain: { type: string }
+        is_default: { type: boolean }
+
+    Usage:
+      type: object
+      properties:
+        plan: { type: string }
+        period_start: { type: string, format: date }
+        allowance: { type: integer }
+        used: { type: integer }
+        reserved: { type: integer }
+        topup: { type: integer }
+        available: { type: integer }

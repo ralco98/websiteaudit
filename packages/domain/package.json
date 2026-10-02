@@ -1,0 +1,28 @@
+{
+  "name": "@convertaudit/domain",
+  "version": "1.0.0",
+  "description": "Pure scoring algorithms, detectors, and finding catalog for ConvertAudit AI (scoring-spec.md)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@convertaudit/contracts": "workspace:*",
+    "@convertaudit/evidence": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

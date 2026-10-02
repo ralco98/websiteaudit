@@ -1,0 +1,22 @@
+{
+  "name": "@convertaudit/contracts",
+  "version": "1.0.0",
+  "description": "Data contracts, TypeScript types, and report.v1 specifications for ConvertAudit AI",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3"
+  }
+}

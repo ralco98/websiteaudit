@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand */
+  --brand-primary: #4F46E5;
+  --brand-primary-contrast: #FFFFFF;
+  --brand-accent: #0EA5E9;
+  --brand-surface: #FFFFFF;
+  --brand-ink: #0F172A;
+
+  /* Semantic status (locked) */
+  --status-critical: #DC2626;
+  --status-high: #EA580C;
+  --status-medium: #CA8A04;
+  --status-low: #2563EB;
+  --status-good: #16A34A;
+  --status-info: #64748B;
+}
+
+body {
+  color: var(--brand-ink);
+  background-color: #0b0f19;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Glassmorphism utility */
+.glass-panel {
+  background: rgba(30, 41, 59, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-light {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+/* Smooth badge glow */
+.badge-glow-critical {
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.35);
+}
+.badge-glow-good {
+  box-shadow: 0 0 15px rgba(22, 163, 74, 0.35);
+}
+.badge-glow-medium {
+  box-shadow: 0 0 15px rgba(202, 138, 4, 0.35);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.5);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.8);
+}
+
+/* Print & PDF Export Stylesheet */
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  header, nav, .no-print, button, [role="tablist"] {
+    display: none !important;
+  }
+
+  .glass-panel {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .text-white, .text-slate-100, .text-slate-200 {
+    color: #0f172a !important;
+  }
+
+  .text-slate-300, .text-slate-400 {
+    color: #475569 !important;
+  }
+
+  .bg-slate-900, .bg-slate-950 {
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+}
+

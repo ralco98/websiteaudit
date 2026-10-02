@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: convertaudit-api
+    runtime: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0

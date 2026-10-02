@@ -1,0 +1,20 @@
+{
+  "name": "convertaudit-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ConvertAudit AI — Website UX, speed, and conversion auditing platform",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "build:web": "pnpm --filter @convertaudit/web... build",
+    "build:api": "pnpm --filter @convertaudit/api... build",
+    "test": "pnpm -r run test",
+    "dev:api": "pnpm --filter @convertaudit/api dev",
+    "dev:web": "pnpm --filter @convertaudit/web dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "packageManager": "pnpm@12.4.1"
+}

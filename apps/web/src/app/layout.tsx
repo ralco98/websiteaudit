@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
-const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://convertaudit.ai';
+const siteUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.synexisdigital.com';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -29,22 +29,23 @@ export const metadata: Metadata = {
     'convert audit',
   ],
   alternates: {
-    canonical: '/',
+    canonical: siteUrl,
   },
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: '/',
+    url: siteUrl,
     siteName: 'ConvertAudit AI',
     title: 'ConvertAudit AI™ — Instant Website Conversion & Mobile UX Audit',
     description:
       'Find out why your website is failing to convert mobile visitors into leads. Plain-English diagnosis, Core Web Vitals, and prioritized developer briefs in under 90 seconds.',
     images: [
       {
-        url: '/opengraph-image',
+        url: `${siteUrl}/opengraph-image`,
         width: 1200,
         height: 630,
         alt: 'ConvertAudit AI — Instant Website Conversion & Mobile UX Audit',
+        type: 'image/png',
       },
     ],
   },
@@ -54,7 +55,7 @@ export const metadata: Metadata = {
     description:
       'Find out why your website is failing to convert mobile visitors into leads with AI-powered UX, clarity, and speed diagnosis.',
     creator: '@webaxissolutions',
-    images: ['/opengraph-image'],
+    images: [`${siteUrl}/opengraph-image`],
   },
   robots: {
     index: true,
